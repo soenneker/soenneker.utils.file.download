@@ -42,7 +42,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Soenneker.Utils.File" Version="3.0.1404" />
+        <PackageReference Include="Soenneker.Utils.File" Version="3.0.1407" />
         <PackageReference Include="Soenneker.Utils.HttpClientCache" Version="3.0.1100" />
         <PackageReference Include="Soenneker.Utils.Path" Version="3.0.747" />
         <PackageReference Include="System.Threading.RateLimiting" Version="9.0.0" />

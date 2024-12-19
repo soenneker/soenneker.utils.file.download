@@ -1,3 +1,5 @@
+using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Soenneker.Utils.File.Download.Abstract;
 using Soenneker.Tests.FixturedUnit;
 using Xunit;
@@ -13,5 +15,11 @@ public class FileDownloadUtilTests : FixturedUnitTest
     public FileDownloadUtilTests(Fixture fixture, ITestOutputHelper output) : base(fixture, output)
     {
         _util = Resolve<IFileDownloadUtil>(true);
+    }
+
+    [Fact]
+    public void Default()
+    {
+
     }
 }

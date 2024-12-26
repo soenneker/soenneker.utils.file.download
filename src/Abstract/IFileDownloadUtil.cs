@@ -22,16 +22,7 @@ public interface IFileDownloadUtil
     /// </returns>
     ValueTask<List<string>> DownloadFiles(string directory, List<string> uris, int maxConcurrentDownloads, CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// Downloads a single file asynchronously, ensuring a unique file path and thread-safe access.
-    /// </summary>
-    /// <param name="directory">The directory where the file will be saved.</param>
-    /// <param name="uri">The URI representing the file to be downloaded.</param>
-    /// <param name="cancellationToken">A token to monitor for cancellation requests.</param>
-    /// <returns>
-    /// A task that represents the asynchronous operation, containing the file path of the downloaded file, or null if the download fails.
-    /// </returns>
-    ValueTask<string?> DownloadFile(string directory, string uri, CancellationToken cancellationToken = default);
+    ValueTask<string?> DownloadFile(string uri, string fileExtension, CancellationToken cancellationToken = default);
 
     ValueTask<string?> DownloadFile(string uri, string directory, string fileExtension, CancellationToken cancellationToken = default);
 

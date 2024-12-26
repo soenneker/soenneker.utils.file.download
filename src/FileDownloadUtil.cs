@@ -33,7 +33,7 @@ public class FileDownloadUtil : IFileDownloadUtil
         _pathUtil = pathUtil;
     }
 
-    public async ValueTask<List<string>> DownloadFiles(string directory, List<string> uris, int maxConcurrentDownloads, CancellationToken cancellationToken = default)
+    public async ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads, CancellationToken cancellationToken = default)
     {
         var downloadedFilePaths = new List<string>(uris.Count);
 
@@ -60,7 +60,7 @@ public class FileDownloadUtil : IFileDownloadUtil
                     {
                         string filePath = await _pathUtil.GetThreadSafeUniqueFilePath(directory, uri, cancellationToken).NoSync();
 
-                        string? result = await DownloadFileAsStream(uri, filePath, client, cancellationToken).NoSync();
+                        string? result = await Download(uri, filePath, null, null, client, cancellationToken).NoSync();
 
                         if (result != null)
                         {
@@ -93,25 +93,44 @@ public class FileDownloadUtil : IFileDownloadUtil
     }
 
 
-    public async ValueTask<string?> DownloadFile(string uri, string fileExtension, CancellationToken cancellationToken = default)
+    public async ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null, 
+        HttpClient? client = null, CancellationToken cancellationToken = default)
     {
-        HttpClient client = await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken).NoSync();
+        client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken).NoSync();
 
-        string filePath = await _pathUtil.GetThreadSafeTempUniqueFilePath(fileExtension, cancellationToken).NoSync();
+        if (filePath == null)
+        {
+            if (directory != null && fileExtension != null)
+                filePath = await _pathUtil.GetThreadSafeRandomUniqueFilePath(directory, fileExtension, cancellationToken).NoSync();
+            else if (fileExtension != null)
+                filePath = await _pathUtil.GetThreadSafeTempUniqueFilePath(fileExtension, cancellationToken).NoSync();
+            else
+                throw new ArgumentException("Either filePath or fileExtension must be provided.");
+        }
 
-        return await DownloadFileAsStream(uri, filePath, client, cancellationToken).NoSync();
+        _logger.LogDebug("Downloading file from URI ({uri}). Saving to {path} ...", uri, filePath);
+
+        try
+        {
+            using HttpResponseMessage response = await client.GetAsync(uri, cancellationToken).NoSync();
+
+            await using (var fs = new FileStream(filePath, FileMode.CreateNew))
+            {
+                await response.Content.CopyToAsync(fs, cancellationToken).NoSync();
+            }
+
+            _logger.LogDebug("Finished download of URI ({uri}). Saved to {filePath}", uri, filePath);
+
+            return filePath;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Failed to download file from URI ({uri}): {message}", uri, ex.Message);
+            return null;
+        }
     }
 
-    public async ValueTask<string?> DownloadFile(string uri, string directory, string fileExtension, CancellationToken cancellationToken = default)
-    {
-        HttpClient client = await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken).NoSync();
-
-        string filePath = await _pathUtil.GetThreadSafeRandomUniqueFilePath(directory, fileExtension, cancellationToken).NoSync();
-
-        return await DownloadFileAsStream(uri, filePath, client, cancellationToken).NoSync();
-    }
-
-    public async ValueTask<string?> DownloadFileAsStream(string uri, string filePath, HttpClient? client = null, CancellationToken cancellationToken = default)
+    public async ValueTask<string?> DownloadAsStream(string uri, string filePath, HttpClient? client = null, CancellationToken cancellationToken = default)
     {
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken).NoSync();
 

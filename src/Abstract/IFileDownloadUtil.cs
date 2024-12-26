@@ -20,11 +20,11 @@ public interface IFileDownloadUtil
     /// <returns>
     /// A task that represents the asynchronous operation, containing a list of file paths for successfully downloaded files.
     /// </returns>
-    ValueTask<List<string>> DownloadFiles(string directory, List<string> uris, int maxConcurrentDownloads, CancellationToken cancellationToken = default);
+    ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads, CancellationToken cancellationToken = default);
 
-    ValueTask<string?> DownloadFile(string uri, string fileExtension, CancellationToken cancellationToken = default);
+    ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
+        HttpClient? client = null, CancellationToken cancellationToken = default);
 
-    ValueTask<string?> DownloadFile(string uri, string directory, string fileExtension, CancellationToken cancellationToken = default);
-
-    ValueTask<string?> DownloadFileAsStream(string uri, string filePath, HttpClient? client = null, CancellationToken cancellationToken = default);
+    
+    ValueTask<string?> DownloadAsStream(string uri, string filePath, HttpClient? client = null, CancellationToken cancellationToken = default);
 }

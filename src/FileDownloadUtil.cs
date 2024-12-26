@@ -115,7 +115,7 @@ public class FileDownloadUtil : IFileDownloadUtil
     {
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken).NoSync();
 
-        _logger.LogDebug("Downloading file from URI ({uri}) ...", uri);
+        _logger.LogDebug("Downloading file from URI ({uri}). Saving to {path} ...", uri, filePath);
 
         try
         {

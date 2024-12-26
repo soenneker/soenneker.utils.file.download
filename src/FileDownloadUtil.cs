@@ -25,6 +25,8 @@ public class FileDownloadUtil : IFileDownloadUtil
     private readonly IPathUtil _pathUtil;
     private readonly AsyncLock _asyncLock = new();
 
+    private const int _bufferSize = 128 * 1024; // 128 KB
+
     public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IFileUtil fileUtil, IPathUtil pathUtil)
     {
         _logger = logger;
@@ -114,10 +116,16 @@ public class FileDownloadUtil : IFileDownloadUtil
         {
             using HttpResponseMessage response = await client.GetAsync(uri, cancellationToken).NoSync();
 
-            await using (var fs = new FileStream(filePath, FileMode.CreateNew))
-            {
-                await response.Content.CopyToAsync(fs, cancellationToken).NoSync();
-            }
+            await using var fs = new FileStream(
+                filePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: _bufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan
+            );
+
+            await response.Content.CopyToAsync(fs, cancellationToken).NoSync();
 
             _logger.LogDebug("Finished download of URI ({uri}). Saved to {filePath}", uri, filePath);
 
@@ -138,7 +146,7 @@ public class FileDownloadUtil : IFileDownloadUtil
 
         try
         {
-            await using (Stream responseStream = await client.GetStreamAsync(uri, cancellationToken))
+            await using (Stream responseStream = await client.GetStreamAsync(uri, cancellationToken).NoSync())
             {
                 await _fileUtil.WriteFile(filePath, responseStream, cancellationToken).NoSync();
             }

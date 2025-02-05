@@ -15,22 +15,28 @@ public static class FileDownloadUtilRegistrar
     /// <summary>
     /// Adds <see cref="IFileDownloadUtil"/> as a singleton service. <para/>
     /// </summary>
-    public static void AddFileDownloadUtilAsSingleton(this IServiceCollection services)
+    public static IServiceCollection AddFileDownloadUtilAsSingleton(this IServiceCollection services)
     {
-        services.AddHttpClientCache();
-        services.AddPathUtilAsSingleton();
+        services.AddHttpClientCacheAsSingleton()
+                .AddPathUtilAsSingleton();
         services.AddFileUtilAsSingleton();
+
         services.TryAddSingleton<IFileDownloadUtil, FileDownloadUtil>();
+
+        return services;
     }
 
     /// <summary>
     /// Adds <see cref="IFileDownloadUtil"/> as a scoped service. <para/>
     /// </summary>
-    public static void AddFileDownloadUtilAsScoped(this IServiceCollection services)
+    public static IServiceCollection AddFileDownloadUtilAsScoped(this IServiceCollection services)
     {
-        services.AddHttpClientCache();
-        services.AddPathUtilAsScoped();
+        services.AddHttpClientCacheAsSingleton()
+                .AddPathUtilAsScoped();
         services.AddFileUtilAsScoped();
+
         services.TryAddScoped<IFileDownloadUtil, FileDownloadUtil>();
+
+        return services;
     }
 }

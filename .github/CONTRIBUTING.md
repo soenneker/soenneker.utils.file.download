@@ -1,4 +1,4 @@
-# Contributing to Soenneker.Utils.File.Download
+﻿# Contributing to Soenneker.Utils.File.Download
 
 We're excited that you're interested in contributing!
 

@@ -17,11 +17,7 @@ public static class FileDownloadUtilRegistrar
     /// </summary>
     public static IServiceCollection AddFileDownloadUtilAsSingleton(this IServiceCollection services)
     {
-        services.AddHttpClientCacheAsSingleton()
-                .AddPathUtilAsSingleton();
-        services.AddFileUtilAsSingleton();
-
-        services.TryAddSingleton<IFileDownloadUtil, FileDownloadUtil>();
+        services.AddHttpClientCacheAsSingleton().AddPathUtilAsSingleton().AddFileUtilAsSingleton().TryAddSingleton<IFileDownloadUtil, FileDownloadUtil>();
 
         return services;
     }
@@ -31,11 +27,7 @@ public static class FileDownloadUtilRegistrar
     /// </summary>
     public static IServiceCollection AddFileDownloadUtilAsScoped(this IServiceCollection services)
     {
-        services.AddHttpClientCacheAsSingleton()
-                .AddPathUtilAsScoped();
-        services.AddFileUtilAsScoped();
-
-        services.TryAddScoped<IFileDownloadUtil, FileDownloadUtil>();
+        services.AddHttpClientCacheAsSingleton().AddPathUtilAsScoped().AddFileUtilAsScoped().TryAddScoped<IFileDownloadUtil, FileDownloadUtil>();
 
         return services;
     }

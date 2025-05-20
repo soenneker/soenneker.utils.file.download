@@ -17,7 +17,7 @@ using Soenneker.Utils.Path.Abstract;
 namespace Soenneker.Utils.File.Download;
 
 ///<inheritdoc cref="IFileDownloadUtil"/>
-public class FileDownloadUtil : IFileDownloadUtil
+public sealed class FileDownloadUtil : IFileDownloadUtil
 {
     private readonly ILogger<FileDownloadUtil> _logger;
     private readonly IHttpClientCache _httpClientCache;
@@ -35,7 +35,8 @@ public class FileDownloadUtil : IFileDownloadUtil
         _pathUtil = pathUtil;
     }
 
-    public async ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads, CancellationToken cancellationToken = default)
+    public async ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads,
+        CancellationToken cancellationToken = default)
     {
         var downloadedFilePaths = new List<string>(uris.Count);
 
@@ -52,24 +53,27 @@ public class FileDownloadUtil : IFileDownloadUtil
 
         foreach (string uri in uris)
         {
-            RateLimitLease lease = await rateLimiter.AcquireAsync(1, cancellationToken).NoSync();
-
-            if (lease.IsAcquired)
+            try
             {
-                Task task = Task.Run(async () =>
+                RateLimitLease lease = await rateLimiter.AcquireAsync(1, cancellationToken).NoSync();
+
+                if (!lease.IsAcquired)
+                {
+                    _logger.LogWarning("Failed to acquire rate limiter permit for URI: {Uri}", uri);
+                    continue;
+                }
+
+                tasks.Add(Task.Run(async () =>
                 {
                     try
                     {
-                        string filePath = await _pathUtil.GetThreadSafeUniqueFilePath(directory, uri, cancellationToken).NoSync();
-
+                        string filePath = await _pathUtil.GetUniqueFilePathFromUri(directory, uri, cancellationToken).NoSync();
                         string? result = await Download(uri, filePath, null, null, client, cancellationToken).NoSync();
 
                         if (result != null)
                         {
                             using (await _asyncLock.LockAsync(cancellationToken).ConfigureAwait(false))
-                            {
                                 downloadedFilePaths.Add(result);
-                            }
                         }
                     }
                     catch (Exception ex)
@@ -78,15 +82,13 @@ public class FileDownloadUtil : IFileDownloadUtil
                     }
                     finally
                     {
-                        lease.Dispose();
+                        lease.Dispose(); // perfectly fine here
                     }
-                }, cancellationToken);
-
-                tasks.Add(task);
+                }, cancellationToken));
             }
-            else
+            catch (Exception ex)
             {
-                _logger.LogWarning("Failed to acquire rate limiter permit for URI: {Uri}", uri);
+                _logger.LogError("Unexpected error acquiring permit: {Message}", ex.Message);
             }
         }
 
@@ -94,8 +96,7 @@ public class FileDownloadUtil : IFileDownloadUtil
         return downloadedFilePaths;
     }
 
-
-    public async ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null, 
+    public async ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
         HttpClient? client = null, CancellationToken cancellationToken = default)
     {
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken).NoSync();
@@ -103,9 +104,9 @@ public class FileDownloadUtil : IFileDownloadUtil
         if (filePath == null)
         {
             if (directory != null && fileExtension != null)
-                filePath = await _pathUtil.GetThreadSafeRandomUniqueFilePath(directory, fileExtension, cancellationToken).NoSync();
+                filePath = await _pathUtil.GetRandomUniqueFilePath(directory, fileExtension, cancellationToken).NoSync();
             else if (fileExtension != null)
-                filePath = await _pathUtil.GetThreadSafeTempUniqueFilePath(fileExtension, cancellationToken).NoSync();
+                filePath = await _pathUtil.GetRandomTempFilePath(fileExtension, cancellationToken).NoSync();
             else
                 throw new ArgumentException("Either filePath or fileExtension must be provided.");
         }
@@ -116,14 +117,8 @@ public class FileDownloadUtil : IFileDownloadUtil
         {
             using HttpResponseMessage response = await client.GetAsync(uri, cancellationToken).NoSync();
 
-            await using var fs = new FileStream(
-                filePath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: _bufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan
-            );
+            await using var fs = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             await response.Content.CopyToAsync(fs, cancellationToken).NoSync();
 
@@ -160,5 +155,15 @@ public class FileDownloadUtil : IFileDownloadUtil
             _logger.LogError("Failed to download file from URI ({uri}): {message}", uri, ex.Message);
             return null;
         }
+    }
+
+    public void Dispose()
+    {
+        _httpClientCache.RemoveSync(nameof(FileDownloadUtil));
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        return _httpClientCache.Remove(nameof(FileDownloadUtil));
     }
 }

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
@@ -8,7 +9,7 @@ namespace Soenneker.Utils.File.Download.Abstract;
 /// <summary>
 /// Defines methods for downloading files asynchronously with thread-safe and rate-limited access.
 /// </summary>
-public interface IFileDownloadUtil
+public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
 {
     /// <summary>
     /// Downloads multiple files asynchronously with rate-limiting and thread-safety for storing unique file paths.

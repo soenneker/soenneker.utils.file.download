@@ -143,7 +143,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         {
             await using (Stream responseStream = await client.GetStreamAsync(uri, cancellationToken).NoSync())
             {
-                await _fileUtil.Write(filePath, responseStream, cancellationToken).NoSync();
+                await _fileUtil.Write(filePath, responseStream, true, cancellationToken).NoSync();
             }
 
             _logger.LogDebug("Finished download of URI ({uri}). Saved to {filePath}", uri, filePath);

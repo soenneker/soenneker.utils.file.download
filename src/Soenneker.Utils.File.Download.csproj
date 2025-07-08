@@ -46,6 +46,6 @@
         <PackageReference Include="Soenneker.Utils.File" Version="3.0.1955" />
         <PackageReference Include="Soenneker.Utils.HttpClientCache" Version="3.0.1718" />
         <PackageReference Include="Soenneker.Utils.Path" Version="3.0.1047" />
-        <PackageReference Include="System.Threading.RateLimiting" Version="9.0.6" />
+        <PackageReference Include="System.Threading.RateLimiting" Version="9.0.7" />
     </ItemGroup>
 </Project>

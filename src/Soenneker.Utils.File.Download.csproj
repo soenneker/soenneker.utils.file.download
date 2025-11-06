@@ -35,7 +35,6 @@
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild></PropertyGroup>
 
     <ItemGroup>
-        
         <None Include="..\README.md" Pack="true" PackagePath="\" />
         <None Include="..\LICENSE" Pack="true" PackagePath="\" />
         <None Include="..\icon.png" Pack="true" PackagePath="\" />
@@ -46,6 +45,6 @@
         <PackageReference Include="Soenneker.Utils.File" Version="4.0.1990" />
         <PackageReference Include="Soenneker.Utils.HttpClientCache" Version="4.0.1755" />
         <PackageReference Include="Soenneker.Utils.Path" Version="4.0.1054" />
-        <PackageReference Include="System.Threading.RateLimiting" Version="9.0.10" />
+        <PackageReference Include="System.Threading.RateLimiting" Version="10.0.0-rc.2.25502.107" />
     </ItemGroup>
 </Project>

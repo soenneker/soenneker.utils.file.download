@@ -1,14 +1,14 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
-using System.Threading.RateLimiting;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.Retry;
-using Soenneker.Asyncs.Locks;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
 using Soenneker.Utils.File.Abstract;
@@ -18,16 +18,19 @@ using Soenneker.Utils.Path.Abstract;
 
 namespace Soenneker.Utils.File.Download;
 
-///<inheritdoc cref="IFileDownloadUtil"/>
+/// <inheritdoc cref="IFileDownloadUtil"/>
 public sealed class FileDownloadUtil : IFileDownloadUtil
 {
     private readonly ILogger<FileDownloadUtil> _logger;
     private readonly IHttpClientCache _httpClientCache;
     private readonly IFileUtil _fileUtil;
     private readonly IPathUtil _pathUtil;
-    private readonly AsyncLock _asyncLock = new();
 
     private const int _bufferSize = 128 * 1024; // 128 KB
+
+    // Small cache to avoid building Polly policies per call
+    // Key = (maxRetries, baseDelaySecondsBits)
+    private static readonly ConcurrentDictionary<(int maxRetries, long baseDelayBits), AsyncRetryPolicy<string?>> _retryPolicies = new();
 
     public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IFileUtil fileUtil, IPathUtil pathUtil)
     {
@@ -40,68 +43,46 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     public async ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads,
         CancellationToken cancellationToken = default)
     {
-        var downloadedFilePaths = new List<string>(uris.Count);
-
-        var rateLimiter = new ConcurrencyLimiter(new ConcurrencyLimiterOptions
-        {
-            PermitLimit = maxConcurrentDownloads,
-            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-            QueueLimit = maxConcurrentDownloads
-        });
-
-        var tasks = new List<Task>(uris.Count);
+        if (uris.Count == 0)
+            return [];
 
         HttpClient client = await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
                                                   .NoSync();
 
-        foreach (string uri in uris)
+        var results = new ConcurrentBag<string>();
+
+        var options = new ParallelOptions
         {
-            try
-            {
-                RateLimitLease lease = await rateLimiter.AcquireAsync(1, cancellationToken)
-                                                        .NoSync();
+            MaxDegreeOfParallelism = maxConcurrentDownloads,
+            CancellationToken = cancellationToken
+        };
 
-                if (!lease.IsAcquired)
-                {
-                    _logger.LogWarning("Failed to acquire rate limiter permit for URI: {Uri}", uri);
-                    continue;
-                }
+        await Parallel.ForEachAsync(uris, options, async (uri, ct) =>
+                      {
+                          try
+                          {
+                              string filePath = await _pathUtil.GetUniqueFilePathFromUri(directory, uri, ct)
+                                                               .NoSync();
 
-                tasks.Add(Task.Run(async () =>
-                {
-                    try
-                    {
-                        string filePath = await _pathUtil.GetUniqueFilePathFromUri(directory, uri, cancellationToken)
-                                                         .NoSync();
-                        string? result = await Download(uri, filePath, null, null, client, cancellationToken)
-                            .NoSync();
+                              string? downloaded = await Download(uri, filePath, null, null, client, ct)
+                                  .NoSync();
 
-                        if (result != null)
-                        {
-                            using (await _asyncLock.Lock(cancellationToken)
-                                                   .NoSync())
-                                downloadedFilePaths.Add(result);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError("Error downloading file from {Uri}: {Message}", uri, ex.Message);
-                    }
-                    finally
-                    {
-                        lease.Dispose(); // perfectly fine here
-                    }
-                }, cancellationToken));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError("Unexpected error acquiring permit: {Message}", ex.Message);
-            }
-        }
+                              if (downloaded is not null)
+                                  results.Add(downloaded);
+                          }
+                          catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                          {
+                              // expected
+                          }
+                          catch (Exception ex)
+                          {
+                              _logger.LogError(ex, "Error downloading file from {Uri}", uri);
+                          }
+                      })
+                      .NoSync();
 
-        await Task.WhenAll(tasks)
-                  .NoSync();
-        return downloadedFilePaths;
+        // Bag -> List (one allocation). Use IsEmpty to avoid O(n) Count.
+        return results.IsEmpty ? [] : results.ToList();
     }
 
     public async ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
@@ -110,38 +91,46 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
                                          .NoSync();
 
-        if (filePath == null)
+        if (filePath is null)
         {
-            if (directory != null && fileExtension != null)
+            if (directory is not null && fileExtension is not null)
                 filePath = await _pathUtil.GetRandomUniqueFilePath(directory, fileExtension, cancellationToken)
                                           .NoSync();
-            else if (fileExtension != null)
+            else if (fileExtension is not null)
                 filePath = await _pathUtil.GetRandomTempFilePath(fileExtension, cancellationToken)
                                           .NoSync();
             else
                 throw new ArgumentException("Either filePath or fileExtension must be provided.");
         }
 
-        _logger.LogDebug("Downloading file from URI ({uri}). Saving to {path} ...", uri, filePath);
-
         try
         {
-            using HttpResponseMessage response = await client.GetAsync(uri, cancellationToken)
+            using HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                                                              .NoSync();
+
+            response.EnsureSuccessStatusCode();
+
+            // If your path utils can return non-existent directories, uncomment:
+            string? dir = System.IO.Path.GetDirectoryName(filePath);
+
+            if (dir is not null)
+                Directory.CreateDirectory(dir);
 
             await using var fs = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-            await response.Content.CopyToAsync(fs, cancellationToken)
-                          .NoSync();
+            await using Stream input = await response.Content.ReadAsStreamAsync(cancellationToken)
+                                                     .NoSync();
 
-            _logger.LogDebug("Finished download of URI ({uri}). Saved to {filePath}", uri, filePath);
+            // CopyToAsync with explicit buffer size
+            await input.CopyToAsync(fs, _bufferSize, cancellationToken)
+                       .NoSync();
 
             return filePath;
         }
         catch (Exception ex)
         {
-            _logger.LogError("Failed to download file from URI ({uri}): {message}", uri, ex.Message);
+            _logger.LogError(ex, "Failed to download file from URI ({uri})", uri);
             return null;
         }
     }
@@ -152,88 +141,46 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
                                          .NoSync();
 
-        // Build exponential back-off: delay = baseDelaySeconds ^ (retryAttempt)
-        AsyncRetryPolicy<string?> retryPolicy = Policy<string?>.Handle<Exception>()
-                                                               .OrResult(result => result == null)
-                                                               .WaitAndRetryAsync(retryCount: maxRetryAttempts,
-                                                                   sleepDurationProvider: retryAttempt =>
-                                                                       TimeSpan.FromSeconds(Math.Pow(baseDelaySeconds, retryAttempt)),
-                                                                   onRetry: (outcome, timespan, retryCount, context) =>
-                                                                   {
-                                                                       if (outcome.Exception != null)
-                                                                       {
-                                                                           _logger.LogWarning(outcome.Exception,
-                                                                               "Download attempt {RetryCount}/{Max} for {Uri} threw, retrying in {Delay}s...",
-                                                                               retryCount, maxRetryAttempts, uri, timespan.TotalSeconds);
-                                                                       }
-                                                                       else
-                                                                       {
-                                                                           _logger.LogWarning(
-                                                                               "Download attempt {RetryCount}/{Max} for {Uri} returned null, retrying in {Delay}s...",
-                                                                               retryCount, maxRetryAttempts, uri, timespan.TotalSeconds);
-                                                                       }
-                                                                   });
+        AsyncRetryPolicy<string?> policy = GetOrCreateRetryPolicy(maxRetryAttempts, baseDelaySeconds);
 
-        // Execute under the retry policy
-        return await retryPolicy.ExecuteAsync(ct => Download(uri, filePath, directory, fileExtension, client, ct)
-            .AsTask(), cancellationToken);
+        // No per-call policy allocation; pass uri via Context so onRetry doesn't close over it.
+        var context = new Context
+        {
+            ["uri"] = uri
+        };
+
+        return await policy.ExecuteAsync((ctx, ct) => Download((string)ctx["uri"]!, filePath, directory, fileExtension, client, ct)
+                               .AsTask(), context, cancellationToken)
+                           .NoSync();
     }
 
-    public async ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
-        HttpClient? client = null, CancellationToken cancellationToken = default)
-    {
-        client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
-                                         .NoSync();
-
-        // Retry policy: on exception or null return, retry 3 times with 2^retryAttempt seconds delay
-        AsyncRetryPolicy<string?> retryPolicy = Policy<string?>.Handle<Exception>()
-                                                               .OrResult(result => result == null)
-                                                               .WaitAndRetryAsync(retryCount: 3,
-                                                                   sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
-                                                                   onRetry: (outcome, timespan, retryCount, context) =>
-                                                                   {
-                                                                       if (outcome.Exception != null)
-                                                                       {
-                                                                           _logger.LogWarning(outcome.Exception,
-                                                                               "Download attempt {RetryCount} for {Uri} threw, retrying in {Delay}s...",
-                                                                               retryCount, uri, timespan.TotalSeconds);
-                                                                       }
-                                                                       else
-                                                                       {
-                                                                           _logger.LogWarning(
-                                                                               "Download attempt {RetryCount} for {Uri} returned null, retrying in {Delay}s...",
-                                                                               retryCount, uri, timespan.TotalSeconds);
-                                                                       }
-                                                                   });
-
-        // Execute the download under the retry policy
-        return await retryPolicy.ExecuteAsync(ct => Download(uri, filePath, directory, fileExtension, client, ct)
-            .AsTask(), cancellationToken);
-    }
+    public ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
+        HttpClient? client = null, CancellationToken cancellationToken = default) => DownloadWithRetry(uri, filePath, directory, fileExtension, client,
+        maxRetryAttempts: 3, baseDelaySeconds: 2.0, cancellationToken);
 
     public async ValueTask<string?> DownloadAsStream(string uri, string filePath, HttpClient? client = null, CancellationToken cancellationToken = default)
     {
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
                                          .NoSync();
 
-        _logger.LogDebug("Downloading file from URI ({uri}). Saving to {path} ...", uri, filePath);
-
         try
         {
-            await using (Stream responseStream = await client.GetStreamAsync(uri, cancellationToken)
-                                                             .NoSync())
-            {
-                await _fileUtil.Write(filePath, responseStream, true, cancellationToken)
-                               .NoSync();
-            }
+            using HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                                                             .NoSync();
 
-            _logger.LogDebug("Finished download of URI ({uri}). Saved to {filePath}", uri, filePath);
+            response.EnsureSuccessStatusCode();
+
+            await using Stream responseStream = await response.Content.ReadAsStreamAsync(cancellationToken)
+                                                              .NoSync();
+
+            await _fileUtil.Write(filePath, responseStream, true, cancellationToken)
+                           .NoSync();
 
             return filePath;
         }
         catch (Exception ex)
         {
-            _logger.LogError("Failed to download file from URI ({uri}): {message}", uri, ex.Message);
+            _logger.LogError(ex, "Failed to download file from URI ({uri})", uri);
             return null;
         }
     }
@@ -246,5 +193,55 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     public ValueTask DisposeAsync()
     {
         return _httpClientCache.Remove(nameof(FileDownloadUtil));
+    }
+
+    private static AsyncRetryPolicy<string?> GetOrCreateRetryPolicy(int maxRetryAttempts, double baseDelaySeconds)
+    {
+        // Normalize key
+        if (maxRetryAttempts <= 0)
+            maxRetryAttempts = 1;
+
+        if (baseDelaySeconds <= 0)
+            baseDelaySeconds = 1;
+
+        long bits = BitConverter.DoubleToInt64Bits(baseDelaySeconds);
+        (int maxRetryAttempts, long bits) key = (maxRetryAttempts, bits);
+
+        return _retryPolicies.GetOrAdd(key, static k =>
+        {
+            int retries = k.maxRetries;
+            double baseSeconds = BitConverter.Int64BitsToDouble(k.baseDelayBits);
+
+            return Policy<string?>.Handle<Exception>()
+                                  .OrResult(static r => r is null)
+                                  .WaitAndRetryAsync(retryCount: retries,
+                                      sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(PowFast(baseSeconds, retryAttempt)),
+                                      onRetryAsync: static (outcome, timespan, retryCount, context) =>
+                                      {
+                                          // Keep policy cacheable: no closure over instance logger.
+                                          // If you want logging, do it at the call site (or swap to a non-static policy creation per instance).
+                                          return Task.CompletedTask;
+                                      });
+        });
+    }
+
+    private static double PowFast(double @base, int exp)
+    {
+        // exp is 1..N (Polly retryAttempt starts at 1)
+        var result = 1d;
+        double b = @base;
+        int e = exp;
+
+        // exponentiation by squaring
+        while (e > 0)
+        {
+            if ((e & 1) != 0)
+                result *= b;
+
+            b *= b;
+            e >>= 1;
+        }
+
+        return result;
     }
 }

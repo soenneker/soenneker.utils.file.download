@@ -11,6 +11,7 @@ using Polly;
 using Polly.Retry;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
+using Soenneker.Utils.Directory.Abstract;
 using Soenneker.Utils.File.Abstract;
 using Soenneker.Utils.File.Download.Abstract;
 using Soenneker.Utils.HttpClientCache.Abstract;
@@ -25,6 +26,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     private readonly IHttpClientCache _httpClientCache;
     private readonly IFileUtil _fileUtil;
     private readonly IPathUtil _pathUtil;
+    private readonly IDirectoryUtil _directoryUtil;
 
     private const int _bufferSize = 128 * 1024; // 128 KB
 
@@ -32,12 +34,13 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     // Key = (maxRetries, baseDelaySecondsBits)
     private static readonly ConcurrentDictionary<(int maxRetries, long baseDelayBits), AsyncRetryPolicy<string?>> _retryPolicies = new();
 
-    public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IFileUtil fileUtil, IPathUtil pathUtil)
+    public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IFileUtil fileUtil, IPathUtil pathUtil, IDirectoryUtil directoryUtil)
     {
         _logger = logger;
         _httpClientCache = httpClientCache;
         _fileUtil = fileUtil;
         _pathUtil = pathUtil;
+        _directoryUtil = directoryUtil;
     }
 
     public async ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads,
@@ -110,11 +113,10 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 
             response.EnsureSuccessStatusCode();
 
-            // If your path utils can return non-existent directories, uncomment:
             string? dir = System.IO.Path.GetDirectoryName(filePath);
 
             if (dir is not null)
-                Directory.CreateDirectory(dir);
+                await _directoryUtil.CreateIfDoesNotExist(dir, false, cancellationToken);
 
             await using var fs = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
@@ -215,7 +217,8 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
             return Policy<string?>.Handle<Exception>()
                                   .OrResult(static r => r is null)
                                   .WaitAndRetryAsync(retryCount: retries,
-                                      sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(PowFast(baseSeconds, retryAttempt)),
+                                      sleepDurationProvider: retryAttempt =>
+                                          TimeSpan.FromSeconds(Math.Pow(baseSeconds, retryAttempt)),
                                       onRetryAsync: static (outcome, timespan, retryCount, context) =>
                                       {
                                           // Keep policy cacheable: no closure over instance logger.
@@ -223,25 +226,5 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
                                           return Task.CompletedTask;
                                       });
         });
-    }
-
-    private static double PowFast(double @base, int exp)
-    {
-        // exp is 1..N (Polly retryAttempt starts at 1)
-        var result = 1d;
-        double b = @base;
-        int e = exp;
-
-        // exponentiation by squaring
-        while (e > 0)
-        {
-            if ((e & 1) != 0)
-                result *= b;
-
-            b *= b;
-            e >>= 1;
-        }
-
-        return result;
     }
 }

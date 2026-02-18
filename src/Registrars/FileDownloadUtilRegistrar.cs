@@ -4,7 +4,6 @@ using Soenneker.Utils.Directory.Registrars;
 using Soenneker.Utils.File.Download.Abstract;
 using Soenneker.Utils.File.Registrars;
 using Soenneker.Utils.HttpClientCache.Registrar;
-using Soenneker.Utils.Path.Registrars;
 
 namespace Soenneker.Utils.File.Download.Registrars;
 
@@ -18,7 +17,7 @@ public static class FileDownloadUtilRegistrar
     /// </summary>
     public static IServiceCollection AddFileDownloadUtilAsSingleton(this IServiceCollection services)
     {
-        services.AddDirectoryUtilAsSingleton().AddHttpClientCacheAsSingleton().AddPathUtilAsSingleton().AddFileUtilAsSingleton().TryAddSingleton<IFileDownloadUtil, FileDownloadUtil>();
+        services.AddDirectoryUtilAsSingleton().AddHttpClientCacheAsSingleton().AddFileUtilAsSingleton().TryAddSingleton<IFileDownloadUtil, FileDownloadUtil>();
 
         return services;
     }
@@ -28,7 +27,7 @@ public static class FileDownloadUtilRegistrar
     /// </summary>
     public static IServiceCollection AddFileDownloadUtilAsScoped(this IServiceCollection services)
     {
-        services.AddDirectoryUtilAsScoped().AddHttpClientCacheAsSingleton().AddPathUtilAsScoped().AddFileUtilAsScoped().TryAddScoped<IFileDownloadUtil, FileDownloadUtil>();
+        services.AddDirectoryUtilAsScoped().AddHttpClientCacheAsSingleton().AddFileUtilAsScoped().TryAddScoped<IFileDownloadUtil, FileDownloadUtil>();
 
         return services;
     }

@@ -118,7 +118,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
             if (dir is not null)
                 await _directoryUtil.Create(dir, false, cancellationToken).NoSync();
 
-            await using var fs = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
+            await using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             await using Stream input = await response.Content.ReadAsStreamAsync(cancellationToken)

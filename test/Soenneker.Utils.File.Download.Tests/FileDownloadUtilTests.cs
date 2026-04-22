@@ -1,23 +1,22 @@
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Soenneker.Utils.File.Download.Abstract;
-using Soenneker.Tests.FixturedUnit;
-using Xunit;
+using Soenneker.Tests.HostedUnit;
 
 
 namespace Soenneker.Utils.File.Download.Tests;
 
-[Collection("Collection")]
-public class FileDownloadUtilTests : FixturedUnitTest
+[ClassDataSource<Host>(Shared = SharedType.PerTestSession)]
+public class FileDownloadUtilTests : HostedUnitTest
 {
     private readonly IFileDownloadUtil _util;
 
-    public FileDownloadUtilTests(Fixture fixture, ITestOutputHelper output) : base(fixture, output)
+    public FileDownloadUtilTests(Host host) : base(host)
     {
         _util = Resolve<IFileDownloadUtil>(true);
     }
 
-    [Fact]
+    [Test]
     public void Default()
     {
 

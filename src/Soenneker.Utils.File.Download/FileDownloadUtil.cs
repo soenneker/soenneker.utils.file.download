@@ -12,7 +12,6 @@ using Polly.Retry;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
 using Soenneker.Utils.Directory.Abstract;
-using Soenneker.Utils.File.Abstract;
 using Soenneker.Utils.File.Download.Abstract;
 using Soenneker.Utils.HttpClientCache.Abstract;
 using Soenneker.Utils.Path.Abstract;
@@ -24,27 +23,26 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 {
     private readonly ILogger<FileDownloadUtil> _logger;
     private readonly IHttpClientCache _httpClientCache;
-    private readonly IFileUtil _fileUtil;
     private readonly IPathUtil _pathUtil;
     private readonly IDirectoryUtil _directoryUtil;
 
     private const int _bufferSize = 128 * 1024; // 128 KB
+    private static readonly TimeSpan _progressLogInterval = TimeSpan.FromSeconds(2);
 
     // Small cache to avoid building Polly policies per call
     // Key = (maxRetries, baseDelaySecondsBits)
     private static readonly ConcurrentDictionary<(int maxRetries, long baseDelayBits), AsyncRetryPolicy<string?>> _retryPolicies = new();
 
-    public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IFileUtil fileUtil, IPathUtil pathUtil, IDirectoryUtil directoryUtil)
+    public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IPathUtil pathUtil, IDirectoryUtil directoryUtil)
     {
         _logger = logger;
         _httpClientCache = httpClientCache;
-        _fileUtil = fileUtil;
         _pathUtil = pathUtil;
         _directoryUtil = directoryUtil;
     }
 
     public async ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads,
-        CancellationToken cancellationToken = default)
+        bool log = true, CancellationToken cancellationToken = default)
     {
         if (uris.Count == 0)
             return [];
@@ -67,7 +65,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
                               string filePath = await _pathUtil.GetUniqueFilePathFromUri(directory, uri, ct)
                                                                .NoSync();
 
-                              string? downloaded = await Download(uri, filePath, null, null, client, ct)
+                              string? downloaded = await Download(uri, filePath, null, null, client, log, ct)
                                   .NoSync();
 
                               if (downloaded is not null)
@@ -79,7 +77,8 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
                           }
                           catch (Exception ex)
                           {
-                              _logger.LogError(ex, "Error downloading file from {Uri}", uri);
+                              if (log)
+                                  _logger.LogError(ex, "Error downloading file from {Uri}", uri);
                           }
                       })
                       .NoSync();
@@ -89,7 +88,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     }
 
     public async ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
-        HttpClient? client = null, CancellationToken cancellationToken = default)
+        HttpClient? client = null, bool log = true, CancellationToken cancellationToken = default)
     {
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
                                          .NoSync();
@@ -118,27 +117,26 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
             if (dir is not null)
                 await _directoryUtil.Create(dir, false, cancellationToken).NoSync();
 
-            await using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-
             await using Stream input = await response.Content.ReadAsStreamAsync(cancellationToken)
                                                      .NoSync();
 
-            // CopyToAsync with explicit buffer size
-            await input.CopyToAsync(fs, _bufferSize, cancellationToken)
-                       .NoSync();
+            await CopyToFile(uri, filePath, input, response.Content.Headers.ContentLength, log, cancellationToken)
+                .NoSync();
 
             return filePath;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to download file from URI ({uri})", uri);
+            if (log)
+                _logger.LogError(ex, "Failed to download file from URI ({uri})", uri);
+
             return null;
         }
     }
 
     public async ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
-        HttpClient? client = null, int maxRetryAttempts = 3, double baseDelaySeconds = 2.0, CancellationToken cancellationToken = default)
+        HttpClient? client = null, int maxRetryAttempts = 3, double baseDelaySeconds = 2.0, bool log = true,
+        CancellationToken cancellationToken = default)
     {
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
                                          .NoSync();
@@ -151,16 +149,17 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
             ["uri"] = uri
         };
 
-        return await policy.ExecuteAsync((ctx, ct) => Download((string)ctx["uri"]!, filePath, directory, fileExtension, client, ct)
+        return await policy.ExecuteAsync((ctx, ct) => Download((string)ctx["uri"]!, filePath, directory, fileExtension, client, log, ct)
                                .AsTask(), context, cancellationToken)
                            .NoSync();
     }
 
     public ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
-        HttpClient? client = null, CancellationToken cancellationToken = default) => DownloadWithRetry(uri, filePath, directory, fileExtension, client,
-        maxRetryAttempts: 3, baseDelaySeconds: 2.0, cancellationToken);
+        HttpClient? client = null, bool log = true, CancellationToken cancellationToken = default) => DownloadWithRetry(uri, filePath, directory, fileExtension,
+        client, maxRetryAttempts: 3, baseDelaySeconds: 2.0, log, cancellationToken);
 
-    public async ValueTask<string?> DownloadAsStream(string uri, string filePath, HttpClient? client = null, CancellationToken cancellationToken = default)
+    public async ValueTask<string?> DownloadAsStream(string uri, string filePath, HttpClient? client = null, bool log = true,
+        CancellationToken cancellationToken = default)
     {
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
                                          .NoSync();
@@ -175,16 +174,79 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
             await using Stream responseStream = await response.Content.ReadAsStreamAsync(cancellationToken)
                                                               .NoSync();
 
-            await _fileUtil.Write(filePath, responseStream, true, cancellationToken)
-                           .NoSync();
+            string? dir = System.IO.Path.GetDirectoryName(filePath);
+
+            if (dir is not null)
+                await _directoryUtil.Create(dir, false, cancellationToken).NoSync();
+
+            await CopyToFile(uri, filePath, responseStream, response.Content.Headers.ContentLength, log, cancellationToken)
+                .NoSync();
 
             return filePath;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to download file from URI ({uri})", uri);
+            if (log)
+                _logger.LogError(ex, "Failed to download file from URI ({uri})", uri);
+
             return null;
         }
+    }
+
+    private async ValueTask CopyToFile(string uri, string filePath, Stream source, long? contentLength, bool log, CancellationToken cancellationToken)
+    {
+        await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        var buffer = new byte[_bufferSize];
+        long totalBytesRead = 0;
+        DateTimeOffset nextProgressLogAt = DateTimeOffset.UtcNow.Add(_progressLogInterval);
+
+        if (log)
+        {
+            if (contentLength is > 0)
+                _logger.LogInformation("Starting download from {uri} to {filePath} ({contentLength} bytes)", uri, filePath, contentLength.Value);
+            else
+                _logger.LogInformation("Starting download from {uri} to {filePath} (unknown size)", uri, filePath);
+        }
+
+        while (true)
+        {
+            int bytesRead = await source.ReadAsync(buffer, cancellationToken)
+                                        .NoSync();
+
+            if (bytesRead == 0)
+                break;
+
+            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken)
+                            .NoSync();
+
+            totalBytesRead += bytesRead;
+
+            if (!log)
+                continue;
+
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+
+            if (now < nextProgressLogAt)
+                continue;
+
+            nextProgressLogAt = now.Add(_progressLogInterval);
+
+            if (contentLength is > 0)
+            {
+                int percentage = (int) Math.Min(100, totalBytesRead * 100 / contentLength.Value);
+                _logger.LogInformation("Download progress for {uri}: {percentage}% ({bytesDownloaded}/{totalBytes} bytes)", uri, percentage, totalBytesRead,
+                    contentLength.Value);
+            }
+            else
+            {
+                _logger.LogInformation("Download progress for {uri}: {bytesDownloaded} bytes", uri, totalBytesRead);
+            }
+        }
+
+        if (log)
+            _logger.LogInformation("Finished download from {uri} to {filePath} ({bytesDownloaded} bytes)", uri, filePath, totalBytesRead);
     }
 
     public void Dispose()

@@ -17,11 +17,13 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// <param name="directory">The directory where files will be saved.</param>
     /// <param name="uris">A list of URIs representing the files to be downloaded.</param>
     /// <param name="maxConcurrentDownloads">The maximum number of concurrent downloads allowed.</param>
+    /// <param name="log">Whether to log download progress.</param>
     /// <param name="cancellationToken">A token to monitor for cancellation requests.</param>
     /// <returns>
     /// A task that represents the asynchronous operation, containing a list of file paths for successfully downloaded files.
     /// </returns>
-    ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads, CancellationToken cancellationToken = default);
+    ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads, bool log = true,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Downloads the content from the specified URI and optionally saves it to a file.
@@ -39,11 +41,12 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// example, ".txt").</param>
     /// <param name="client">An optional HttpClient instance to use for the download operation. If null, a new HttpClient instance will be
     /// created and used.</param>
+    /// <param name="log">Whether to log download progress.</param>
     /// <param name="cancellationToken">A cancellation token that can be used to cancel the download operation.</param>
     /// <returns>A task that represents the asynchronous operation. The task result contains the downloaded content as a string,
     /// or null if the download fails.</returns>
     ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
-        HttpClient? client = null, CancellationToken cancellationToken = default);
+        HttpClient? client = null, bool log = true, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Attempts to download the given URI with a retry policy.
@@ -55,9 +58,11 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// <param name="client">Optional pre-configured HttpClient.</param>
     /// <param name="maxRetryAttempts">How many times to retry on failure or null result.</param>
     /// <param name="baseDelaySeconds">The base delay (in seconds) for exponential back-off.</param>
+    /// <param name="log">Whether to log download progress.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
-        HttpClient? client = null, int maxRetryAttempts = 3, double baseDelaySeconds = 2.0, CancellationToken cancellationToken = default);
+        HttpClient? client = null, int maxRetryAttempts = 3, double baseDelaySeconds = 2.0, bool log = true,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Downloads the content from the specified URI, retrying the operation on failure up to a default number of
@@ -75,12 +80,13 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// determined from the content type.</param>
     /// <param name="client">An optional <see cref="HttpClient"/> instance to use for the download. If not provided, a new instance is
     /// created and disposed after use.</param>
+    /// <param name="log">Whether to log download progress.</param>
     /// <param name="cancellationToken">A cancellation token that can be used to cancel the download operation.</param>
     /// <returns>A task that represents the asynchronous operation. The task result contains the downloaded content as a string,
     /// or <see langword="null"/> if the download fails.</returns>
     ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null, HttpClient? client = null,
-        CancellationToken cancellationToken = default) => DownloadWithRetry(uri, filePath, directory, fileExtension, client, maxRetryAttempts: 3,
-        baseDelaySeconds: 2.0, cancellationToken);
+        bool log = true, CancellationToken cancellationToken = default) => DownloadWithRetry(uri, filePath, directory, fileExtension, client,
+        maxRetryAttempts: 3, baseDelaySeconds: 2.0, log, cancellationToken);
 
     /// <summary>
     /// Downloads the content from the specified URI and saves it to the given file path as a stream asynchronously.
@@ -91,9 +97,10 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// <param name="filePath">The file system path where the downloaded content will be saved. This parameter must be a valid, non-null file
     /// path.</param>
     /// <param name="client">An optional HttpClient instance to use for the download request. If null, a default HttpClient instance is used.</param>
+    /// <param name="log">Whether to log download progress.</param>
     /// <param name="cancellationToken">A cancellation token that can be used to cancel the download operation. The default value is
     /// CancellationToken.None.</param>
     /// <returns>A ValueTask that represents the asynchronous operation. The result contains the file path where the content was
     /// saved, or null if the download failed.</returns>
-    ValueTask<string?> DownloadAsStream(string uri, string filePath, HttpClient? client = null, CancellationToken cancellationToken = default);
+    ValueTask<string?> DownloadAsStream(string uri, string filePath, HttpClient? client = null, bool log = true, CancellationToken cancellationToken = default);
 }

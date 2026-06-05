@@ -249,11 +249,18 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
             _logger.LogInformation("Finished download from {uri} to {filePath} ({bytesDownloaded} bytes)", uri, filePath, totalBytesRead);
     }
 
+    /// <summary>
+    /// Releases resources used by the current instance.
+    /// </summary>
     public void Dispose()
     {
         _httpClientCache.RemoveSync(nameof(FileDownloadUtil));
     }
 
+    /// <summary>
+    /// Asynchronously releases resources used by the current instance.
+    /// </summary>
+    /// <returns>A task that represents the asynchronous operation.</returns>
     public ValueTask DisposeAsync()
     {
         return _httpClientCache.Remove(nameof(FileDownloadUtil));

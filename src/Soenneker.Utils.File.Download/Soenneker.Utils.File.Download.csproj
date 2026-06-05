@@ -45,7 +45,7 @@
 
     <ItemGroup>
         <PackageReference Include="Polly" Version="8.6.6" />
-        <PackageReference Include="Soenneker.Utils.Directory" Version="4.0.855" />
+        <PackageReference Include="Soenneker.Utils.Directory" Version="4.0.858" />
         <PackageReference Include="Soenneker.Utils.HttpClientCache" Version="4.0.1949" />
         <PackageReference Include="System.Threading.RateLimiting" Version="10.0.8" />
     </ItemGroup>

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -27,6 +28,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     private readonly IDirectoryUtil _directoryUtil;
 
     private const int _bufferSize = 128 * 1024; // 128 KB
+    private const int _maxCachedRetryPolicies = 32;
     private static readonly TimeSpan _progressLogInterval = TimeSpan.FromSeconds(2);
 
     // Small cache to avoid building Polly policies per call
@@ -198,7 +200,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-        var buffer = new byte[_bufferSize];
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
         long totalBytesRead = 0;
         DateTimeOffset nextProgressLogAt = DateTimeOffset.UtcNow.Add(_progressLogInterval);
 
@@ -210,39 +212,46 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
                 _logger.LogInformation("Starting download from {uri} to {filePath} (unknown size)", uri, filePath);
         }
 
-        while (true)
+        try
         {
-            int bytesRead = await source.ReadAsync(buffer, cancellationToken)
-                                        .NoSync();
-
-            if (bytesRead == 0)
-                break;
-
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken)
-                            .NoSync();
-
-            totalBytesRead += bytesRead;
-
-            if (!log)
-                continue;
-
-            DateTimeOffset now = DateTimeOffset.UtcNow;
-
-            if (now < nextProgressLogAt)
-                continue;
-
-            nextProgressLogAt = now.Add(_progressLogInterval);
-
-            if (contentLength is > 0)
+            while (true)
             {
-                int percentage = (int) Math.Min(100, totalBytesRead * 100 / contentLength.Value);
-                _logger.LogInformation("Download progress for {uri}: {percentage}% ({bytesDownloaded}/{totalBytes} bytes)", uri, percentage, totalBytesRead,
-                    contentLength.Value);
+                int bytesRead = await source.ReadAsync(buffer.AsMemory(0, _bufferSize), cancellationToken)
+                                            .NoSync();
+
+                if (bytesRead == 0)
+                    break;
+
+                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken)
+                                .NoSync();
+
+                totalBytesRead += bytesRead;
+
+                if (!log)
+                    continue;
+
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+
+                if (now < nextProgressLogAt)
+                    continue;
+
+                nextProgressLogAt = now.Add(_progressLogInterval);
+
+                if (contentLength is > 0)
+                {
+                    int percentage = (int) Math.Min(100, totalBytesRead * 100 / contentLength.Value);
+                    _logger.LogInformation("Download progress for {uri}: {percentage}% ({bytesDownloaded}/{totalBytes} bytes)", uri, percentage,
+                        totalBytesRead, contentLength.Value);
+                }
+                else
+                {
+                    _logger.LogInformation("Download progress for {uri}: {bytesDownloaded} bytes", uri, totalBytesRead);
+                }
             }
-            else
-            {
-                _logger.LogInformation("Download progress for {uri}: {bytesDownloaded} bytes", uri, totalBytesRead);
-            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
 
         if (log)
@@ -278,22 +287,26 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         long bits = BitConverter.DoubleToInt64Bits(baseDelaySeconds);
         (int maxRetryAttempts, long bits) key = (maxRetryAttempts, bits);
 
-        return _retryPolicies.GetOrAdd(key, static k =>
-        {
-            int retries = k.maxRetries;
-            double baseSeconds = BitConverter.Int64BitsToDouble(k.baseDelayBits);
+        if (_retryPolicies.TryGetValue(key, out AsyncRetryPolicy<string?>? cached))
+            return cached;
 
-            return Policy<string?>.Handle<Exception>()
-                                  .OrResult(static r => r is null)
-                                  .WaitAndRetryAsync(retryCount: retries,
-                                      sleepDurationProvider: retryAttempt =>
-                                          TimeSpan.FromSeconds(Math.Pow(baseSeconds, retryAttempt)),
-                                      onRetryAsync: static (outcome, timespan, retryCount, context) =>
-                                      {
-                                          // Keep policy cacheable: no closure over instance logger.
-                                          // If you want logging, do it at the call site (or swap to a non-static policy creation per instance).
-                                          return Task.CompletedTask;
-                                      });
-        });
+        AsyncRetryPolicy<string?> created = CreateRetryPolicy(key);
+
+        if (_retryPolicies.Count >= _maxCachedRetryPolicies)
+            return created;
+
+        return _retryPolicies.GetOrAdd(key, created);
+    }
+
+    private static AsyncRetryPolicy<string?> CreateRetryPolicy((int maxRetries, long baseDelayBits) key)
+    {
+        int retries = key.maxRetries;
+        double baseSeconds = BitConverter.Int64BitsToDouble(key.baseDelayBits);
+
+        return Policy<string?>.Handle<Exception>()
+                              .OrResult(static r => r is null)
+                              .WaitAndRetryAsync(retryCount: retries,
+                                  sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(baseSeconds, retryAttempt)),
+                                  onRetryAsync: static (outcome, timespan, retryCount, context) => Task.CompletedTask);
     }
 }

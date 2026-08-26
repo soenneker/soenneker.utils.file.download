@@ -197,7 +197,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 
     private async ValueTask CopyToFile(string uri, string filePath, Stream source, long? contentLength, bool log, CancellationToken cancellationToken)
     {
-        await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: _bufferSize,
+        await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         byte[] buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);

@@ -12,39 +12,32 @@ namespace Soenneker.Utils.File.Download.Abstract;
 public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
 {
     /// <summary>
-    /// Downloads multiple files asynchronously with rate-limiting and thread-safety for storing unique file paths.
+    /// Downloads multiple URIs into a directory with bounded concurrency.
     /// </summary>
-    /// <param name="directory">The directory where files will be saved.</param>
-    /// <param name="uris">A list of URIs representing the files to be downloaded.</param>
-    /// <param name="maxConcurrentDownloads">The maximum number of concurrent downloads allowed.</param>
-    /// <param name="log">Whether to log download progress.</param>
-    /// <param name="cancellationToken">A token to monitor for cancellation requests.</param>
-    /// <returns>
-    /// A task that represents the asynchronous operation, containing a list of file paths for successfully downloaded files.
-    /// </returns>
+    /// <param name="directory">The destination or root directory.</param>
+    /// <param name="uris">The resource URIs.</param>
+    /// <param name="maxConcurrentDownloads">The maximum simultaneous downloads.</param>
+    /// <param name="log">True to emit operational logging.</param>
+    /// <param name="cancellationToken">Signals that the operation should stop.</param>
+    /// <returns>Paths of successfully downloaded files.</returns>
     ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads, bool log = true,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Downloads the content from the specified URI and optionally saves it to a file.
+    /// Downloads a URI to an explicit or generated path and returns the saved file name.
     /// </summary>
+    /// <param name="uri">The remote resource URI.</param>
+    /// <param name="filePath">An explicit destination path, or null to generate one.</param>
+    /// <param name="directory">The destination or root directory.</param>
+    /// <param name="fileExtension">The extension for a generated destination.</param>
+    /// <param name="client">An optional HTTP client; null uses the configured client cache.</param>
+    /// <param name="log">True to emit operational logging.</param>
+    /// <param name="cancellationToken">Signals that the operation should stop.</param>
+    /// <returns>The saved path, or null when no file was written.</returns>
     /// <remarks>If both 'filePath' and 'directory' are null, the method downloads the content but does not
     /// save it to disk. If a directory is specified without a file path, a file will be created in the directory using
     /// the provided file extension, if any. The caller is responsible for disposing the provided HttpClient instance if
     /// one is supplied.</remarks>
-    /// <param name="uri">The URI from which to download the content. This parameter must be a valid, absolute URI.</param>
-    /// <param name="filePath">The optional file path where the downloaded content will be saved. If not specified, the content will not be
-    /// saved to a file unless a directory is provided.</param>
-    /// <param name="directory">The optional directory in which to save the file if 'filePath' is not specified. If both 'filePath' and
-    /// 'directory' are null, the content will not be saved.</param>
-    /// <param name="fileExtension">The optional file extension to use when saving the file. The extension should include the leading dot (for
-    /// example, ".txt").</param>
-    /// <param name="client">An optional HttpClient instance to use for the download operation. If null, a new HttpClient instance will be
-    /// created and used.</param>
-    /// <param name="log">Whether to log download progress.</param>
-    /// <param name="cancellationToken">A cancellation token that can be used to cancel the download operation.</param>
-    /// <returns>A task that represents the asynchronous operation. The task result contains the downloaded content as a string,
-    /// or null if the download fails.</returns>
     ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
         HttpClient? client = null, bool log = true, CancellationToken cancellationToken = default);
 
@@ -60,30 +53,25 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// <param name="baseDelaySeconds">The base delay (in seconds) for exponential back-off.</param>
     /// <param name="log">Whether to log download progress.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Attempts to download the given URI with a retry policy.</returns>
     ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
         HttpClient? client = null, int maxRetryAttempts = 3, double baseDelaySeconds = 2.0, bool log = true,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Downloads the content from the specified URI, retrying the operation on failure up to a default number of
-    /// attempts.
+    /// Downloads a URI with the utility's retry policy and returns the saved file name.
     /// </summary>
+    /// <param name="uri">The remote resource URI.</param>
+    /// <param name="filePath">An explicit destination path, or null to generate one.</param>
+    /// <param name="directory">The destination or root directory.</param>
+    /// <param name="fileExtension">The extension for a generated destination.</param>
+    /// <param name="client">An optional HTTP client; null uses the configured client cache.</param>
+    /// <param name="log">True to emit operational logging.</param>
+    /// <param name="cancellationToken">Signals that the operation should stop.</param>
+    /// <returns>The saved path, or null after retries are exhausted.</returns>
     /// <remarks>The method automatically retries the download operation up to three times with a default
     /// delay between attempts. If a file path is provided, the content is saved to the specified location in addition
     /// to being returned as a string.</remarks>
-    /// <param name="uri">The URI from which to download the content. This value must be a valid, absolute URI string.</param>
-    /// <param name="filePath">The optional file path where the downloaded content will be saved. If not specified, the content is not saved to
-    /// a file.</param>
-    /// <param name="directory">The optional directory in which to save the file if <paramref name="filePath"/> is specified. If not provided,
-    /// the default directory is used.</param>
-    /// <param name="fileExtension">The optional file extension to use when saving the downloaded content. If not specified, the file extension is
-    /// determined from the content type.</param>
-    /// <param name="client">An optional <see cref="HttpClient"/> instance to use for the download. If not provided, a new instance is
-    /// created and disposed after use.</param>
-    /// <param name="log">Whether to log download progress.</param>
-    /// <param name="cancellationToken">A cancellation token that can be used to cancel the download operation.</param>
-    /// <returns>A task that represents the asynchronous operation. The task result contains the downloaded content as a string,
-    /// or <see langword="null"/> if the download fails.</returns>
     ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null, HttpClient? client = null,
         bool log = true, CancellationToken cancellationToken = default) => DownloadWithRetry(uri, filePath, directory, fileExtension, client,
         maxRetryAttempts: 3, baseDelaySeconds: 2.0, log, cancellationToken);

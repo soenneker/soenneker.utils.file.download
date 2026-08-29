@@ -14,6 +14,7 @@ public static class FileDownloadUtilRegistrar
     /// <summary>
     /// Adds <see cref="IFileDownloadUtil"/> as a singleton service. <para/>
     /// </summary>
+    /// <returns>Adds <see cref="IFileDownloadUtil"/> as a singleton service. <para/>.</returns>
     public static IServiceCollection AddFileDownloadUtilAsSingleton(this IServiceCollection services)
     {
         services.AddDirectoryUtilAsSingleton().AddHttpClientCacheAsSingleton().TryAddSingleton<IFileDownloadUtil, FileDownloadUtil>();
@@ -24,6 +25,7 @@ public static class FileDownloadUtilRegistrar
     /// <summary>
     /// Adds <see cref="IFileDownloadUtil"/> as a scoped service. <para/>
     /// </summary>
+    /// <returns>Adds <see cref="IFileDownloadUtil"/> as a scoped service. <para/>.</returns>
     public static IServiceCollection AddFileDownloadUtilAsScoped(this IServiceCollection services)
     {
         services.AddDirectoryUtilAsScoped().AddHttpClientCacheAsSingleton().TryAddScoped<IFileDownloadUtil, FileDownloadUtil>();

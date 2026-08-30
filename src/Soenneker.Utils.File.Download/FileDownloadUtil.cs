@@ -75,7 +75,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
                           }
                           catch (OperationCanceledException) when (ct.IsCancellationRequested)
                           {
-                              // expected
+                              throw;
                           }
                           catch (Exception ex)
                           {
@@ -126,6 +126,10 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
                 .NoSync();
 
             return filePath;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -186,6 +190,10 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 
             return filePath;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             if (log)
@@ -197,9 +205,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 
     private async ValueTask CopyToFile(string uri, string filePath, Stream source, long? contentLength, bool log, CancellationToken cancellationToken)
     {
-        await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-
+        string temporaryPath = filePath + "." + Guid.NewGuid().ToString("N") + ".download";
         byte[] buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
         long totalBytesRead = 0;
         DateTimeOffset nextProgressLogAt = DateTimeOffset.UtcNow.Add(_progressLogInterval);
@@ -214,44 +220,52 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 
         try
         {
-            while (true)
+            await using (var fileStream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 1,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
-                int bytesRead = await source.ReadAsync(buffer.AsMemory(0, _bufferSize), cancellationToken)
-                                            .NoSync();
-
-                if (bytesRead == 0)
-                    break;
-
-                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken)
-                                .NoSync();
-
-                totalBytesRead += bytesRead;
-
-                if (!log)
-                    continue;
-
-                DateTimeOffset now = DateTimeOffset.UtcNow;
-
-                if (now < nextProgressLogAt)
-                    continue;
-
-                nextProgressLogAt = now.Add(_progressLogInterval);
-
-                if (contentLength is > 0)
+                while (true)
                 {
-                    int percentage = (int) Math.Min(100, totalBytesRead * 100 / contentLength.Value);
-                    _logger.LogInformation("Download progress for {uri}: {percentage}% ({bytesDownloaded}/{totalBytes} bytes)", uri, percentage,
-                        totalBytesRead, contentLength.Value);
-                }
-                else
-                {
-                    _logger.LogInformation("Download progress for {uri}: {bytesDownloaded} bytes", uri, totalBytesRead);
+                    int bytesRead = await source.ReadAsync(buffer.AsMemory(0, _bufferSize), cancellationToken)
+                                                .NoSync();
+
+                    if (bytesRead == 0)
+                        break;
+
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken)
+                                    .NoSync();
+
+                    totalBytesRead += bytesRead;
+
+                    if (!log)
+                        continue;
+
+                    DateTimeOffset now = DateTimeOffset.UtcNow;
+
+                    if (now < nextProgressLogAt)
+                        continue;
+
+                    nextProgressLogAt = now.Add(_progressLogInterval);
+
+                    if (contentLength is > 0)
+                    {
+                        int percentage = (int) Math.Min(100, totalBytesRead * 100 / contentLength.Value);
+                        _logger.LogInformation("Download progress for {uri}: {percentage}% ({bytesDownloaded}/{totalBytes} bytes)", uri, percentage,
+                            totalBytesRead, contentLength.Value);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Download progress for {uri}: {bytesDownloaded} bytes", uri, totalBytesRead);
+                    }
                 }
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            System.IO.File.Move(temporaryPath, filePath, overwrite: true);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+            System.IO.File.Delete(temporaryPath);
         }
 
         if (log)
@@ -263,7 +277,6 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     /// </summary>
     public void Dispose()
     {
-        _httpClientCache.RemoveSync(nameof(FileDownloadUtil));
     }
 
     /// <summary>
@@ -272,7 +285,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     /// <returns>A task that represents the asynchronous operation.</returns>
     public ValueTask DisposeAsync()
     {
-        return _httpClientCache.Remove(nameof(FileDownloadUtil));
+        return ValueTask.CompletedTask;
     }
 
     private static AsyncRetryPolicy<string?> GetOrCreateRetryPolicy(int maxRetryAttempts, double baseDelaySeconds)
@@ -303,7 +316,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         int retries = key.maxRetries;
         double baseSeconds = BitConverter.Int64BitsToDouble(key.baseDelayBits);
 
-        return Policy<string?>.Handle<Exception>()
+        return Policy<string?>.Handle<Exception>(static exception => exception is not OperationCanceledException)
                               .OrResult(static r => r is null)
                               .WaitAndRetryAsync(retryCount: retries,
                                   sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(baseSeconds, retryAttempt)),

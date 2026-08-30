@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 namespace Soenneker.Utils.File.Download.Abstract;
 
 /// <summary>
-/// Defines methods for downloading files asynchronously with thread-safe and rate-limited access.
+/// Defines methods for streaming HTTP responses to files, including bounded concurrent downloads and retries.
 /// </summary>
 public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
 {
@@ -33,11 +33,9 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// <param name="client">An optional HTTP client; null uses the configured client cache.</param>
     /// <param name="log">True to emit operational logging.</param>
     /// <param name="cancellationToken">Signals that the operation should stop.</param>
-    /// <returns>The saved path, or null when no file was written.</returns>
-    /// <remarks>If both 'filePath' and 'directory' are null, the method downloads the content but does not
-    /// save it to disk. If a directory is specified without a file path, a file will be created in the directory using
-    /// the provided file extension, if any. The caller is responsible for disposing the provided HttpClient instance if
-    /// one is supplied.</remarks>
+    /// <returns>The saved path, or null when the HTTP or file operation fails.</returns>
+    /// <remarks>A generated destination requires <paramref name="fileExtension"/>. When <paramref name="directory"/> is also provided,
+    /// the generated file is placed there; otherwise a temporary path is used. The caller retains ownership of a supplied <paramref name="client"/>.</remarks>
     ValueTask<string?> Download(string uri, string? filePath = null, string? directory = null, string? fileExtension = null,
         HttpClient? client = null, bool log = true, CancellationToken cancellationToken = default);
 
@@ -49,7 +47,7 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// <param name="directory">Optional directory to auto-generate a filename in.</param>
     /// <param name="fileExtension">Optional extension to auto-generate a temp file.</param>
     /// <param name="client">Optional pre-configured HttpClient.</param>
-    /// <param name="maxRetryAttempts">How many times to retry on failure or null result.</param>
+    /// <param name="maxRetryAttempts">How many retries to perform after the initial attempt.</param>
     /// <param name="baseDelaySeconds">The base delay (in seconds) for exponential back-off.</param>
     /// <param name="log">Whether to log download progress.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -69,9 +67,7 @@ public interface IFileDownloadUtil : IDisposable, IAsyncDisposable
     /// <param name="log">True to emit operational logging.</param>
     /// <param name="cancellationToken">Signals that the operation should stop.</param>
     /// <returns>The saved path, or null after retries are exhausted.</returns>
-    /// <remarks>The method automatically retries the download operation up to three times with a default
-    /// delay between attempts. If a file path is provided, the content is saved to the specified location in addition
-    /// to being returned as a string.</remarks>
+    /// <remarks>The method performs up to three retries after the initial attempt. The result is the saved path, not downloaded content.</remarks>
     ValueTask<string?> DownloadWithRetry(string uri, string? filePath = null, string? directory = null, string? fileExtension = null, HttpClient? client = null,
         bool log = true, CancellationToken cancellationToken = default) => DownloadWithRetry(uri, filePath, directory, fileExtension, client,
         maxRetryAttempts: 3, baseDelaySeconds: 2.0, log, cancellationToken);

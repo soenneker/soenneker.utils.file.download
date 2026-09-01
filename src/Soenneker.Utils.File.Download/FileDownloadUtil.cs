@@ -12,7 +12,7 @@ using Polly;
 using Polly.Retry;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
-using Soenneker.Utils.Directory.Abstract;
+using Soenneker.Utils.File.Abstract;
 using Soenneker.Utils.File.Download.Abstract;
 using Soenneker.Utils.HttpClientCache.Abstract;
 using Soenneker.Utils.Path.Abstract;
@@ -25,7 +25,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     private readonly ILogger<FileDownloadUtil> _logger;
     private readonly IHttpClientCache _httpClientCache;
     private readonly IPathUtil _pathUtil;
-    private readonly IDirectoryUtil _directoryUtil;
+    private readonly IFileUtil _fileUtil;
 
     private const int _bufferSize = 128 * 1024; // 128 KB
     private const int _maxCachedRetryPolicies = 32;
@@ -35,12 +35,12 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     // Key = (maxRetries, baseDelaySecondsBits)
     private static readonly ConcurrentDictionary<(int maxRetries, long baseDelayBits), AsyncRetryPolicy<string?>> _retryPolicies = new();
 
-    public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IPathUtil pathUtil, IDirectoryUtil directoryUtil)
+    public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IPathUtil pathUtil, IFileUtil fileUtil)
     {
         _logger = logger;
         _httpClientCache = httpClientCache;
         _pathUtil = pathUtil;
-        _directoryUtil = directoryUtil;
+        _fileUtil = fileUtil;
     }
 
     public async ValueTask<List<string>> DownloadMultiple(string directory, List<string> uris, int maxConcurrentDownloads,
@@ -114,11 +114,6 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 
             response.EnsureSuccessStatusCode();
 
-            string? dir = System.IO.Path.GetDirectoryName(filePath);
-
-            if (dir is not null)
-                await _directoryUtil.Create(dir, false, cancellationToken).NoSync();
-
             await using Stream input = await response.Content.ReadAsStreamAsync(cancellationToken)
                                                      .NoSync();
 
@@ -180,11 +175,6 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
             await using Stream responseStream = await response.Content.ReadAsStreamAsync(cancellationToken)
                                                               .NoSync();
 
-            string? dir = System.IO.Path.GetDirectoryName(filePath);
-
-            if (dir is not null)
-                await _directoryUtil.Create(dir, false, cancellationToken).NoSync();
-
             await CopyToFile(uri, filePath, responseStream, response.Content.Headers.ContentLength, log, cancellationToken)
                 .NoSync();
 
@@ -205,7 +195,6 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 
     private async ValueTask CopyToFile(string uri, string filePath, Stream source, long? contentLength, bool log, CancellationToken cancellationToken)
     {
-        string temporaryPath = filePath + "." + Guid.NewGuid().ToString("N") + ".download";
         byte[] buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
         long totalBytesRead = 0;
         DateTimeOffset nextProgressLogAt = DateTimeOffset.UtcNow.Add(_progressLogInterval);
@@ -220,18 +209,17 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
 
         try
         {
-            await using (var fileStream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 1,
-                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            await _fileUtil.WriteAtomically(filePath, async (fileStream, ct) =>
             {
                 while (true)
                 {
-                    int bytesRead = await source.ReadAsync(buffer.AsMemory(0, _bufferSize), cancellationToken)
+                    int bytesRead = await source.ReadAsync(buffer.AsMemory(0, _bufferSize), ct)
                                                 .NoSync();
 
                     if (bytesRead == 0)
                         break;
 
-                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken)
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct)
                                     .NoSync();
 
                     totalBytesRead += bytesRead;
@@ -257,15 +245,11 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
                         _logger.LogInformation("Download progress for {uri}: {bytesDownloaded} bytes", uri, totalBytesRead);
                     }
                 }
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            System.IO.File.Move(temporaryPath, filePath, overwrite: true);
+            }, log: false, cancellationToken).NoSync();
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
-            System.IO.File.Delete(temporaryPath);
         }
 
         if (log)

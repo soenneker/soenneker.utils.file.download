@@ -8,8 +8,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Polly;
-using Polly.Retry;
+using Kevlar;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
 using Soenneker.Utils.File.Abstract;
@@ -31,9 +30,9 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
     private const int _maxCachedRetryPolicies = 32;
     private static readonly TimeSpan _progressLogInterval = TimeSpan.FromSeconds(2);
 
-    // Small cache to avoid building Polly policies per call
+    // Small cache to avoid building Kevlar shields per call
     // Key = (maxRetries, baseDelaySecondsBits)
-    private static readonly ConcurrentDictionary<(int maxRetries, long baseDelayBits), AsyncRetryPolicy<string?>> _retryPolicies = new();
+    private static readonly ConcurrentDictionary<(int maxRetries, long baseDelayBits), Shield<string?>> _retryShields = new();
 
     public FileDownloadUtil(ILogger<FileDownloadUtil> logger, IHttpClientCache httpClientCache, IPathUtil pathUtil, IFileUtil fileUtil)
     {
@@ -142,16 +141,9 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         client ??= await _httpClientCache.Get(nameof(FileDownloadUtil), cancellationToken: cancellationToken)
                                          .NoSync();
 
-        AsyncRetryPolicy<string?> policy = GetOrCreateRetryPolicy(maxRetryAttempts, baseDelaySeconds);
+        Shield<string?> shield = GetOrCreateRetryShield(maxRetryAttempts, baseDelaySeconds);
 
-        // No per-call policy allocation; pass uri via Context so onRetry doesn't close over it.
-        var context = new Context
-        {
-            ["uri"] = uri
-        };
-
-        return await policy.ExecuteAsync((ctx, ct) => Download((string)ctx["uri"]!, filePath, directory, fileExtension, client, log, ct)
-                               .AsTask(), context, cancellationToken)
+        return await shield.ExecuteAsync(ct => Download(uri, filePath, directory, fileExtension, client, log, ct), cancellationToken)
                            .NoSync();
     }
 
@@ -272,7 +264,7 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         return ValueTask.CompletedTask;
     }
 
-    private static AsyncRetryPolicy<string?> GetOrCreateRetryPolicy(int maxRetryAttempts, double baseDelaySeconds)
+    private static Shield<string?> GetOrCreateRetryShield(int maxRetryAttempts, double baseDelaySeconds)
     {
         // Normalize key
         if (maxRetryAttempts <= 0)
@@ -284,26 +276,25 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
         long bits = BitConverter.DoubleToInt64Bits(baseDelaySeconds);
         (int maxRetryAttempts, long bits) key = (maxRetryAttempts, bits);
 
-        if (_retryPolicies.TryGetValue(key, out AsyncRetryPolicy<string?>? cached))
+        if (_retryShields.TryGetValue(key, out Shield<string?>? cached))
             return cached;
 
-        AsyncRetryPolicy<string?> created = CreateRetryPolicy(key);
+        Shield<string?> created = CreateRetryShield(key);
 
-        if (_retryPolicies.Count >= _maxCachedRetryPolicies)
+        if (_retryShields.Count >= _maxCachedRetryPolicies)
             return created;
 
-        return _retryPolicies.GetOrAdd(key, created);
+        return _retryShields.GetOrAdd(key, created);
     }
 
-    private static AsyncRetryPolicy<string?> CreateRetryPolicy((int maxRetries, long baseDelayBits) key)
+    private static Shield<string?> CreateRetryShield((int maxRetries, long baseDelayBits) key)
     {
         int retries = key.maxRetries;
         double baseSeconds = BitConverter.Int64BitsToDouble(key.baseDelayBits);
 
-        return Policy<string?>.Handle<Exception>(static exception => exception is not OperationCanceledException)
-                              .OrResult(static r => r is null)
-                              .WaitAndRetryAsync(retryCount: retries,
-                                  sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(baseSeconds, retryAttempt)),
-                                  onRetryAsync: static (outcome, timespan, retryCount, context) => Task.CompletedTask);
+        return Shield.For<string?>()
+                     .When<Exception>(static exception => exception is not OperationCanceledException)
+                     .OrResult(static result => result is null)
+                     .Retry(retries, Backoff.Custom(attempt => TimeSpan.FromSeconds(Math.Pow(baseSeconds, attempt))));
     }
 }

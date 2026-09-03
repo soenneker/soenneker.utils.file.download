@@ -44,7 +44,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Polly" Version="8.7.0" />
+        <PackageReference Include="Kevlar" Version="1.1.0" />
         <PackageReference Include="Soenneker.Utils.File" Version="4.0.2246" />
         <PackageReference Include="Soenneker.Utils.HttpClientCache" Version="4.0.2051" />
         <PackageReference Include="Soenneker.Utils.Path" Version="4.0.1209" />

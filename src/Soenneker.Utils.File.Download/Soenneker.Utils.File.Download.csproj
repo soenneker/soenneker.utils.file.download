@@ -50,4 +50,7 @@
         <PackageReference Include="Soenneker.Utils.Path" Version="4.0.1238" />
         <PackageReference Include="System.Threading.RateLimiting" Version="10.0.12" />
     </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.123" />
+    </ItemGroup>
 </Project>

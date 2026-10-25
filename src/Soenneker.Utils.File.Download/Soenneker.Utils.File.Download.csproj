@@ -49,7 +49,7 @@
         <PackageReference Include="Soenneker.Utils.File" Version="4.0.2319" />
         <PackageReference Include="Soenneker.Utils.HttpClientCache" Version="4.0.2128" />
         <PackageReference Include="Soenneker.Utils.Path" Version="4.0.1264" />
-        <PackageReference Include="System.Threading.RateLimiting" Version="10.0.13" />
+        <PackageReference Include="System.Threading.RateLimiting" Version="10.0.14" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.133" />

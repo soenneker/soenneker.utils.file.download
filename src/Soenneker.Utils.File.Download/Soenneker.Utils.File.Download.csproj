@@ -46,7 +46,7 @@
 
     <ItemGroup>
         <PackageReference Include="Kevlar" Version="1.5.0" />
-        <PackageReference Include="Soenneker.Utils.File" Version="11.0.2346" />
+        <PackageReference Include="Soenneker.Utils.File" Version="11.0.2347" />
         <PackageReference Include="Soenneker.Utils.HttpClientCache" Version="11.0.2161" />
         <PackageReference Include="Soenneker.Utils.Path" Version="11.0.1279" />
         <PackageReference Include="System.Threading.RateLimiting" Version="11.0.0" />

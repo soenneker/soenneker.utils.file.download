@@ -234,7 +234,8 @@ public sealed class FileDownloadUtil : IFileDownloadUtil
                     }
                     else
                     {
-                        _logger.LogInformation("Download progress for {uri}: {bytesDownloaded} bytes", uri, totalBytesRead);
+                        if (_logger.IsEnabled(LogLevel.Information))
+                            _logger.LogInformation("Download progress for {uri}: {bytesDownloaded} bytes", uri, totalBytesRead);
                     }
                 }
             }, log: false, cancellationToken).NoSync();
